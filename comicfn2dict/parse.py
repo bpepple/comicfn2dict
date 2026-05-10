@@ -11,15 +11,20 @@ from typing import TYPE_CHECKING
 
 from comicfn2dict.log import print_log_header
 from comicfn2dict.regex import (
+    ACRONYM_TRAIL_DOT_RE,
     ALPHA_MONTH_RANGE_RE,
     BOOK_VOLUME_RE,
+    BY_AUTHOR_RE,
+    DASH_SEPARATOR_RE,
     ISSUE_BEGIN_RE,
     ISSUE_END_RE,
+    ISSUE_LETTER_RE,
     ISSUE_NUMBER_RE,
     ISSUE_WITH_COUNT_RE,
+    LETTER_DOT_RE,
     MONTH_FIRST_DATE_RE,
-    NON_NUMBER_DOT_RE,
     ORIGINAL_FORMAT_NAKED_RE,
+    ORIGINAL_FORMAT_SCAN_INFO_ADJACENT_RE,
     ORIGINAL_FORMAT_SCAN_INFO_RE,
     ORIGINAL_FORMAT_SCAN_INFO_SEPARATE_RE,
     PUBLISHER_AMBIGUOUS_RE,
@@ -30,9 +35,11 @@ from comicfn2dict.regex import (
     REMAINDER_PAREN_GROUPS_RE,
     REMAINING_GROUP_RE,
     SCAN_INFO_SECONDARY_RE,
-    TOKEN_DELIMETER,
+    TITLE_PAREN_RE,
+    TOKEN_DELIMITER,
     VOLUME_RE,
     VOLUME_WITH_COUNT_RE,
+    WORD_NUMBER_TO_DIGIT,
     YEAR_END_RE,
     YEAR_FIRST_DATE_RE,
     YEAR_TOKEN_RE,
@@ -41,7 +48,7 @@ from comicfn2dict.regex import (
 if TYPE_CHECKING:
     from re import Match, Pattern
 
-_DATE_KEYS = frozenset({"year", "month", "day"})
+_DATE_KEYS: frozenset[str] = frozenset({"year", "month", "day"})
 _REMAINING_GROUP_KEYS = ("series", "title")
 # Ordered by commonness.
 _TITLE_PRECEDING_KEYS = ("issue", "year", "volume", "month")
@@ -54,7 +61,7 @@ class ComicFilenameParser:
         """Lazily retrieve and memoize the key's location in the path."""
         if key == "remainders":
             return default
-        value: str = self.metadata.get(key, "")  # type: ignore[reportAssignmentType]
+        value: str = self.metadata.get(key, "")  # pyright: ignore[reportAssignmentType], # ty: ignore[invalid-assignment]
         if not value:
             return default
         if value not in self._path_indexes:
@@ -98,7 +105,7 @@ class ComicFilenameParser:
         self._log("After Clean Path")
 
     def _parse_items_update_metadata(
-        self, matches: Match, exclude: str, require_all: bool, first_only: bool
+        self, matches: Match, exclude: str, *, require_all: bool, first_only: bool
     ) -> bool:
         """Update Metadata."""
         matched_metadata = {}
@@ -117,24 +124,25 @@ class ComicFilenameParser:
         self.metadata.update(matched_metadata)
         return True
 
-    def _parse_items_pop_tokens(self, regex: Pattern, first_only: bool) -> None:
+    def _parse_items_pop_tokens(self, regex: Pattern, *, first_only: bool) -> None:
         """Pop tokens from unparsed path."""
         count = 1 if first_only else 0
-        marked_str = regex.sub(TOKEN_DELIMETER, self._unparsed_path, count=count)
+        marked_str = regex.sub(TOKEN_DELIMITER, self._unparsed_path, count=count)
         parts = []
-        for part in marked_str.split(TOKEN_DELIMETER):
+        for part in marked_str.split(TOKEN_DELIMITER):
             token = part.strip()
             if token:
                 parts.append(token)
-        self._unparsed_path = TOKEN_DELIMETER.join(parts)
+        self._unparsed_path = TOKEN_DELIMITER.join(parts)
 
     def _parse_items(
         self,
         regex: Pattern,
-        require_all: bool = False,  # noqa: FBT002
-        first_only: bool = False,  # noqa: FBT002
-        pop: bool = True,  # noqa: FBT002
         exclude: str = "",
+        *,
+        require_all: bool = False,
+        first_only: bool = False,
+        pop: bool = True,
     ) -> None:
         """Parse a value from the data list into metadata and alter the data list."""
         # Match
@@ -143,18 +151,22 @@ class ComicFilenameParser:
             return
 
         if not self._parse_items_update_metadata(
-            matches, exclude, require_all, first_only
+            matches, exclude, require_all=require_all, first_only=first_only
         ):
             return
 
         if pop:
-            self._parse_items_pop_tokens(regex, first_only)
+            self._parse_items_pop_tokens(regex, first_only=first_only)
 
     def _parse_issue(self) -> None:
         """Parse Issue."""
         self._parse_items(ISSUE_NUMBER_RE)
         if "issue" not in self.metadata:
             self._parse_items(ISSUE_WITH_COUNT_RE)
+        if "issue" not in self.metadata:
+            # Letter-only issues like "#Omega" or "#Alpha" — only fires when
+            # no digit-bearing issue regex matched.
+            self._parse_items(ISSUE_LETTER_RE)
         self._log("After Issue")
 
     def _parse_volume(self) -> None:
@@ -166,10 +178,9 @@ class ComicFilenameParser:
 
     def _alpha_month_to_numeric(self) -> None:
         """Translate alpha_month to numeric month."""
-        alpha_month: str = self.metadata.pop("alpha_month", "")  # type: ignore[reportAssignmentType]
+        alpha_month: str = self.metadata.pop("alpha_month", "")  # pyright: ignore[reportAssignmentType], # ty: ignore[invalid-assignment]
         if alpha_month:
             alpha_month = alpha_month.capitalize()
-            # type: ignore[reportAttributeAccessIssue]
             for index, abbr in enumerate(month_abbr):
                 if abbr and alpha_month.startswith(abbr):
                     month = f"{index:02d}"
@@ -204,10 +215,18 @@ class ComicFilenameParser:
 
     def _parse_format_and_scan_info(self) -> None:
         """Format & Scan Info."""
+        # Try adjacent "(format) (scan_info)" pairs first so compound formats
+        # like "(digital-mobile) (Empire)" don't get split as
+        # format=digital + scan_info=mobile by the combined regex.
         self._parse_items(
-            ORIGINAL_FORMAT_SCAN_INFO_RE,
+            ORIGINAL_FORMAT_SCAN_INFO_ADJACENT_RE,
             require_all=True,
         )
+        if "original_format" not in self.metadata:
+            self._parse_items(
+                ORIGINAL_FORMAT_SCAN_INFO_RE,
+                require_all=True,
+            )
         if "original_format" not in self.metadata:
             self._parse_items(
                 ORIGINAL_FORMAT_SCAN_INFO_SEPARATE_RE,
@@ -219,18 +238,40 @@ class ComicFilenameParser:
             self.metadata["scan_info"] = scan_info_secondary
         self._log("After original_format & scan_info")
 
+    def _parse_paren_subtitle(self) -> None:
+        """
+        Promote a Title Case paren group to a title (FCBD-style subtitle).
+
+        Only fires when there's a single remaining paren group, to avoid
+        misclassifying scan_info releaser groups like "(Shadowcat-Empire)"
+        that follow another paren.
+        """
+        if "title" in self.metadata:
+            return
+        if self._unparsed_path.count("(") != 1:
+            return
+        self._parse_items(TITLE_PAREN_RE, first_only=True)
+        self._log("After paren subtitle")
+
     def _parse_remainder_paren_groups(self) -> None:
         """Remove extraneous paren groups."""
         self._parse_items(REMAINDER_PAREN_GROUPS_RE)
-        remainders: str = self.metadata.get("remainders", "")  # type: ignore[reportAssignmentType]
+        remainders: str = self.metadata.get("remainders", "")  # pyright: ignore[reportAssignmentType], # ty: ignore[invalid-assignment]
         if remainders:
             self.metadata["remainders"] = (remainders,)
         self._log("After parsing remainder paren and bracket groups")
 
-    def _parse_ends_of_remaining_tokens(self):
+    def _parse_ends_of_remaining_tokens(self) -> None:
         # Volume left on the end of string tokens
         if "volume" not in self.metadata:
             self._parse_items(BOOK_VOLUME_RE)
+            # BOOK_VOLUME_RE accepts word-number volumes ("Book One"); convert
+            # them to digit strings so downstream consumers see "1" not "one".
+            volume = self.metadata.get("volume", "")
+            if isinstance(volume, str) and (
+                digit := WORD_NUMBER_TO_DIGIT.get(volume.lower())
+            ):
+                self.metadata["volume"] = digit
             self._log("After original_format & scan_info")
 
         # Years left on the end of string tokens
@@ -242,7 +283,7 @@ class ComicFilenameParser:
 
         # Issue left on the end of string tokens
         if "issue" not in self.metadata and not year_end_matched:
-            exclude: str = self.metadata.get("year", "")  # type: ignore[reportAssignmentType]
+            exclude: str = self.metadata.get("year", "")  # pyright: ignore[reportAssignmentType], # ty: ignore[invalid-assignment]
             self._parse_items(ISSUE_END_RE, exclude=exclude)
         if "issue" not in self.metadata:
             self._parse_items(ISSUE_BEGIN_RE)
@@ -250,10 +291,13 @@ class ComicFilenameParser:
 
     def _parse_publisher(self) -> None:
         """Parse Publisher."""
-        # Pop single tokens so they don't end up titles.
-        self._parse_items(PUBLISHER_UNAMBIGUOUS_TOKEN_RE, first_only=True)
-        if "publisher" not in self.metadata:
-            self._parse_items(PUBLISHER_AMBIGUOUS_TOKEN_RE, first_only=True)
+        # Pop publisher tokens so they don't end up as titles, but only if
+        # other tokens remain — otherwise the publisher IS the series
+        # (e.g. "Marvel #001 (2020).cbz").
+        if TOKEN_DELIMITER in self._unparsed_path:
+            self._parse_items(PUBLISHER_UNAMBIGUOUS_TOKEN_RE, first_only=True)
+            if "publisher" not in self.metadata:
+                self._parse_items(PUBLISHER_AMBIGUOUS_TOKEN_RE, first_only=True)
         if "publisher" not in self.metadata:
             self._parse_items(PUBLISHER_UNAMBIGUOUS_RE, pop=False, first_only=True)
         if "publisher" not in self.metadata:
@@ -314,7 +358,16 @@ class ComicFilenameParser:
                 self.metadata["original_format"] = match.group()
                 return ""
 
-        value = NON_NUMBER_DOT_RE.sub(r"\1 \2", value)
+        # Acronyms produce overlapping matches (A.X.E. needs two passes)
+        while (new := LETTER_DOT_RE.sub(r"\1 \2", value)) != value:
+            value = new
+        # Drop trailing acronym dot ("A X E." -> "A X E", "S H I E L D." ->
+        # "S H I E L D"). Keeps "Dr.", "Inc.", "vs." since those aren't
+        # whitespace-bounded single letters.
+        value = ACRONYM_TRAIL_DOT_RE.sub(r"\1\2\3", value)
+        # Drop "by Author1 (& Author2)" attribution from series names.
+        if key == "series":
+            value = BY_AUTHOR_RE.sub("", value)
         value = self._grouping_operators_strip(value)
         if value:
             self.metadata[key] = value
@@ -325,9 +378,22 @@ class ComicFilenameParser:
         if not self._unparsed_path:
             return
 
+        tokens = self._unparsed_path.split(TOKEN_DELIMITER)
+        # Promote a single dash separator in the only remaining token to a
+        # series/title boundary. Catches the common convention where the
+        # canonical ":" is replaced with " - " (or "word- ") because
+        # filesystems disallow ":". Restricted to the single-token case so
+        # multi-dash co-headlining like "Aquaman - Green Arrow - Deep Target"
+        # stays in the series and so a later token already destined for the
+        # title isn't displaced.
+        if "title" not in self.metadata and len(tokens) == 1:
+            matches = DASH_SEPARATOR_RE.findall(tokens[0])
+            if len(matches) == 1:
+                head, tail = DASH_SEPARATOR_RE.split(tokens[0], maxsplit=1)
+                tokens = [head, tail]
+
         remaining_key_index = 0
         unused_tokens = []
-        tokens = self._unparsed_path.split(TOKEN_DELIMETER)
         while tokens and remaining_key_index < len(_REMAINING_GROUP_KEYS):
             unused_token = self._parse_series_and_title_token(
                 remaining_key_index, tokens
@@ -342,7 +408,7 @@ class ComicFilenameParser:
     def _add_remainders(self) -> None:
         """Add Remainders."""
         remainders = []
-        for token in self._unparsed_path.split(TOKEN_DELIMETER):
+        for token in self._unparsed_path.split(TOKEN_DELIMITER):
             remainder = token.strip()
             if remainder:
                 remainders.append(remainder)
@@ -361,6 +427,7 @@ class ComicFilenameParser:
         self._parse_volume()
         self._parse_dates()
         self._parse_format_and_scan_info()
+        self._parse_paren_subtitle()
         self._parse_remainder_paren_groups()
         self._parse_ends_of_remaining_tokens()
         self._parse_publisher()
@@ -376,7 +443,7 @@ class ComicFilenameParser:
 
         return self.metadata
 
-    def __init__(self, path: str | Path, verbose: int = 0):
+    def __init__(self, path: str | Path, verbose: int = 0) -> None:
         """Initialize."""
         self._debug: bool = verbose > 0
         # munge path

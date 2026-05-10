@@ -1,14 +1,34 @@
 # 📰 comicfn2dict News
 
-# v0.2.5
+## v0.3.0
+
+- Fixes
+    - Smarter dot handling for Mega.Dude and B.U.C.K.L.E.R. without compromising
+      Dr. or 0.0.1 versions.
+    - Keep publishers from sometimes being mistaken for titles.
+    - Year (2022-) handled correctly
+    - Handle #Alpha as an issue indicator more properly.
+- Features
+    - New format patterns recognized.
+    - Handle lots of FCBD naming patterns.
+    - Word-number volumes are recognized: "Book One" through "Book Twenty"
+    - Strip trailing "by \<Author Names>" attribution from a series when three
+      or more tokens follow "by". Single-author tails like "Werepenguin By
+      Night" or "Step By Bloody Step" are preserved.
+    - A single dash separator (" - " or "word- ") now splits a series and title
+      to align with the canonical ":" convention that filesystems disallow.
+      Multi-dash co-headlining names like "Hanuman - Foolish One - Deep Target"
+      stay in the series.
+
+## v0.2.5
 
 - Slightly expanded range of publishing format detection.
 
-# v0.2.4
+## v0.2.4
 
 - Fix parsing negative issue numbers
 
-# v0.2.3
+## v0.2.3
 
 - Dependencies security update
 

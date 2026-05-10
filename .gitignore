@@ -1,9 +1,9 @@
 __pycache__/
 __pypackages__/
 __snapshots__
-.cache
-.coverage
-.coverage.*
+.*cache
+.claude
+.coverage*
 .dmypy.json
 .docker-token
 .DS_Store
@@ -29,6 +29,7 @@ __snapshots__
 .spyderproject
 .spyproject
 .tox/
+.uv-publish-env
 .venv*
 .webassets-cache
 *.cover
@@ -77,7 +78,6 @@ pip-delete-this-directory.txt
 pip-log.txt
 pip-wheel-metadata/
 profile_default/
-requirements.txt
 sdist/
 share/python-wheels/
 target/

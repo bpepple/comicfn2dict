@@ -71,12 +71,12 @@ class ComicFilenameSerializer:
             self._log("After date", date)
             self.metadata = MappingProxyType({**self.metadata, "date": date})
 
-    def _tokenize_tag(self, tag: str, fmt: str | Callable) -> str:
+    def _tokenize_tag(self, tag: str, fmt: str | Callable[[str], str]) -> str:
         """Add tags to the string."""
         val = self.metadata.get(tag)
         if val in _EMPTY_VALUES:
             return ""
-        final_fmt = fmt(val) if isinstance(fmt, Callable) else fmt
+        final_fmt: str = fmt(val) if isinstance(fmt, Callable) else fmt  # ty: ignore[call-top-callable]
         return final_fmt.format(val).strip()
 
     def _add_remainder(self) -> str:
@@ -111,14 +111,14 @@ class ComicFilenameSerializer:
 
         return fn
 
-    def __init__(self, metadata: Mapping, ext: bool = True, verbose: int = 0):  # noqa: FBT002
+    def __init__(self, metadata: Mapping, ext: bool = True, verbose: int = 0) -> None:  # noqa: FBT001,FBT002
         """Initialize."""
         self.metadata: Mapping = metadata
         self._ext: bool = ext
         self._debug: bool = bool(verbose)
 
 
-def dict2comicfn(md: Mapping, ext: bool = True, verbose: int = 0) -> str:  # noqa: FBT002
+def dict2comicfn(md: Mapping, ext: bool = True, verbose: int = 0) -> str:  # noqa: FBT001,FBT002
     """Simplify API."""
     serializer = ComicFilenameSerializer(md, ext=ext, verbose=verbose)
     return serializer.serialize()
